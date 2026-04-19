@@ -89,19 +89,19 @@ int main() {
     // Horisontal distance to the target
     float h = 
         attackSpeed * t - 
-        t * t * d * attackSpeed / (2.0 * m) + 
+        pow(t, 2) * d * attackSpeed / (2.0 * m) + 
         pow(t, 3) * (
             6.0 * d * g * l * m - 6.0 * d * d * (l * l - 1.0) * attackSpeed
         ) / (36.0 * m * m) + 
         pow(t, 4) * (
-            -6.0 * d * d * g * l * (1 + l * l + pow(l, 4)) * m + 
-            3.0 * d * d * d * l * l * (1.0 + l * l) * attackSpeed + 
-            6.0 * d * d * d * pow(l, 4) * (1 + l * l) * attackSpeed
-        ) / (36.0 * pow(1 + l * l, 2) * m * m * m) +
+            -6.0 * pow(d, 2)* g * l * (1 + pow(l, 2) + pow(l, 4)) * m + 
+            3.0 * pow(d, 3) * pow(l, 2) * (1.0 + pow(l, 2)) * attackSpeed + 
+            6.0 * pow(d, 3) * pow(l, 4) * (1 + pow(l, 2)) * attackSpeed
+        ) / (36.0 * pow(1 + pow(l, 2), 2) * pow(m, 3)) +
         pow(t, 5) * (
-            3.0 * d * d * d * g * l * l * l * m -
-            3.0 * pow(d, 4) * l * l * (1 + l * l) * attackSpeed
-        ) / (36.0 * (1 + l * l) * pow(m, 4));
+            3.0 * pow(d, 3) * g * pow(l, 3) * m -
+            3.0 * pow(d, 4) * pow(l, 2) * (1 + pow(l, 2)) * attackSpeed
+        ) / (36.0 * (1 + pow(l, 2)) * pow(m, 4));
 
     // Determine the drop point
     float distanceTarget = sqrt(pow(targetX - xd, 2) + pow(targetY - yd, 2));
