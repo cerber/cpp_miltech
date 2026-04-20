@@ -14,14 +14,28 @@
 
 using namespace std;
 
+// The drone states
+enum droneStates {
+    EN_DS_STOPPED,      // The drone is stationary
+    EN_DS_ACCELERATING, // The drone is accelerating towards the target
+    EN_DS_DECELERATING, // The drone is decelerating towards the target
+    EN_DS_TURNING,      // The drone is turning
+    EN_DS_MOVING,       // The drone is moving towards the target
+    EN_DS_FIRING        // The drone is firing at the target
+};
+
 int targetInterpolation(const int target, 
     const float targetXInTime[TARGETS_COUNT][TARGETS_POINTS], 
     const float targetYInTime[TARGETS_COUNT][TARGETS_POINTS], 
     const float targetTimeStep, const float simTime,
     float &targetX, float &targetY);
-int ballistics(float xd, float yd, float zd, float targetX, float targetY, 
+int calcBallistic(float xd, float yd, float zd, float targetX, float targetY, 
     float attackSpeed, float accelerationPath, float m, float d, float l,
     float &fireX, float &fireY, float &xd1, float &yd1);
+int simulationStep(droneStates &state, float directionToTarget, float distanceToTarget, 
+    float turnThreshold, float hitRadius, float angularSpeed, 
+    float acceleration, float attackSpeed, float simTimeStep, 
+    float &direction, float &currentSpeed, float &xd, float &yd);
 
 int main() {
     // Open the input file
@@ -131,15 +145,6 @@ int main() {
     float d = bombDrag[ammoIndex];
     float l = bombLift[ammoIndex];
 
-   // The drone states
-    enum droneStates {
-        EN_DS_STOPPED,      // The drone is stationary
-        EN_DS_ACCELERATING, // The drone is accelerating towards the target
-        EN_DS_DECELERATING, // The drone is decelerating towards the target
-        EN_DS_TURNING,      // The drone is turning
-        EN_DS_MOVING        // The drone is moving towards the target
-    };
-
     droneStates state = EN_DS_STOPPED; // Initial state of the drone
     
     // Drone acceleration and maneuver parameters
@@ -151,8 +156,8 @@ int main() {
     int currentTarget = 0;  // Index of the current target
 
     do {
-        float distanceToTarget[TARGETS_COUNT];
-        float directionToTarget[TARGETS_COUNT];
+        float distanceToTarget[TARGETS_COUNT];  // Array to store the distance from the drone to each target
+        float directionToTarget[TARGETS_COUNT]; // Array to store the direction from the drone to each target
 
 #ifdef DEBUG        
         cout << std::fixed << std::setprecision(2);
@@ -161,25 +166,49 @@ int main() {
         cout << " Speed: " << currentSpeed << " m/s State: " << state << endl;
 #endif
 
-        for (int target = 0; target < TARGETS_COUNT; target++) {
+        // loop through each target to calculate the distance and direction from the drone to the target
+        for (int target = 0; target < TARGETS_COUNT; target++) { 
             float targetX{0.0f}, targetY{0.0f};
             float fireX{0.0f}, fireY{0.0f}, xd1{0.0f}, yd1{0.0f};
 
             targetInterpolation(target, targetXInTime, targetYInTime, targetTimeStep, simTime, targetX, targetY);
-            ballistics(xd, yd, zd, targetX, targetY, attackSpeed, accelerationPath, m, d, l, fireX, fireY, xd1, yd1);
-            distanceToTarget[target] = sqrt(pow(fireX - xd, 2) + pow(fireY - yd, 2));
-            directionToTarget[target] = atan2(fireY - yd, fireX - xd);
+            if (calcBallistic(xd, yd, zd, targetX, targetY, attackSpeed, accelerationPath, m, d, l, fireX, fireY, xd1, yd1) > 0) {
+                // If the ballistics calculation fails, set the distance and direction to target to zero
+                distanceToTarget[target] = 0.0f;
+                directionToTarget[target] = 0.0f;
+                continue;
+            };
+            if (xd1 == 0.0f && yd1 == 0.0f) {
+                distanceToTarget[target] = sqrt(pow(fireX - xd, 2) + pow(fireY - yd, 2));
+                directionToTarget[target] = atan2(fireY - yd, fireX - xd);
+            } else {
+                // try to perform a maneuver if the drop point is outside the target area
+                distanceToTarget[target] = sqrt(pow(xd1 - xd, 2) + pow(yd1 - yd, 2));
+                directionToTarget[target] = atan2(yd1 - yd, xd1 - xd); 
+            }
 
 #ifdef DEBUG           
             cout << "Target " << target + 1 << ": (" << targetX << ", " << targetY << ")";
             cout << ",\tFire Point: (" << fireX << ", " << fireY << ")" << ",\tManeuver Point: (" << xd1 << ", " << yd1 << ")";
             cout << ",\tDistance to Target: " << distanceToTarget[target] << ",\tDirection to Target: " << directionToTarget[target] << " radians" << endl;
+
+            while (state != EN_DS_FIRING) {
+                simulationStep(state, directionToTarget[target], distanceToTarget[target], turnThreshold, hitRadius, angularSpeed, acceleration, attackSpeed, simTimeStep, direction, currentSpeed, xd, yd);
+                simTime += simTimeStep;
+            }
+            cout << "Target " << target + 1 << " hit!" << endl;
+            cout << "-----------------------------------------" << endl;
+            cout << "######### Simulation Time: " << simTime << " seconds" << endl;
+            cout << "Drone Position: (" << xd << ", " << yd << ", " << zd << ")" << " Direction: " << direction << " radians";
+            cout << " Speed: " << currentSpeed << " m/s State: " << state << endl;  
 #endif
         }
+
+        // Decision making based on the current state and the distance/direction to the target
+
         simTime += simTimeStep;
 
     } while (++iteration < MAX_STEPS);
-
 }
 
 int targetInterpolation(const int target, 
@@ -202,7 +231,7 @@ int targetInterpolation(const int target,
     return 0;
 }
 
-int ballistics(float xd, float yd, float zd, float targetX, float targetY, 
+int calcBallistic(float xd, float yd, float zd, float targetX, float targetY, 
     float attackSpeed, float accelerationPath, float m, float d, float l,
     float &fireX, float &fireY, 
     float &xd1, float &yd1) {
@@ -273,3 +302,87 @@ int ballistics(float xd, float yd, float zd, float targetX, float targetY,
 
     return 0;
 }
+
+int simulationStep(droneStates &state, float directionToTarget, float distanceToTarget, 
+    float turnThreshold, float hitRadius, float angularSpeed, 
+    float acceleration, float attackSpeed, float simTimeStep, 
+    float &direction, float &currentSpeed, float &xd, float &yd) {
+
+    droneStates newState = state; // Variable to hold the new state after decision making
+    float delta = directionToTarget - direction;
+
+    switch (state) {
+        case EN_DS_STOPPED:
+            if (currentSpeed > 0.0f) {
+                newState = EN_DS_DECELERATING;
+                break;
+            } else if (fabs(delta) > turnThreshold) {
+                newState = EN_DS_TURNING;
+            } else if (distanceToTarget > hitRadius) {
+                newState = EN_DS_ACCELERATING;
+            }
+            break;
+        case EN_DS_TURNING:
+            if (fabs(delta) <= turnThreshold) {
+                newState = EN_DS_ACCELERATING;
+            } else if (currentSpeed > 0.0f) {
+                newState = EN_DS_DECELERATING;
+            } else {
+                // Simulate the turning by adjusting the drone's direction
+                direction += (delta > 0 ? 1 : -1) * angularSpeed * simTimeStep;
+            }
+            break;
+        case EN_DS_ACCELERATING:
+            if (fabs(delta) > turnThreshold) {
+                newState = EN_DS_DECELERATING;
+            // } else if (distanceToTarget <= hitRadius) {
+            //     newState = EN_DS_FIRING;
+            } else {
+                // Simulate the acceleration by increasing the drone's speed
+                currentSpeed += acceleration * simTimeStep;
+                if (currentSpeed > attackSpeed) {
+                    currentSpeed = attackSpeed; // Cap the speed at the attack speed
+                    newState = EN_DS_MOVING; // Transition to moving state once the attack speed is reached
+                }
+                // Update the drone's position based on the current speed and direction
+                xd += currentSpeed * cos(direction) * simTimeStep;
+                yd += currentSpeed * sin(direction) * simTimeStep;
+            }
+            break;
+        case EN_DS_DECELERATING:
+            // if (distanceToTarget <= hitRadius) {
+            //     newState = EN_DS_FIRING;
+            // } else 
+            {
+                // Simulate the deceleration by decreasing the drone's speed
+                currentSpeed -= acceleration * simTimeStep;
+                if (currentSpeed < 0)
+                {
+                    currentSpeed = 0.0f;      // Ensure the speed does not go negative
+                    newState = EN_DS_STOPPED; // Transition to stopped state if speed reaches zero
+                }
+                // Update the drone's position based on the current speed and direction
+                xd += currentSpeed * cos(direction) * simTimeStep;
+                yd += currentSpeed * sin(direction) * simTimeStep;
+            }
+        case EN_DS_MOVING:
+            if (distanceToTarget <= hitRadius) {
+                newState = EN_DS_FIRING;
+            } else if (fabs(delta) > turnThreshold) {
+                newState = EN_DS_TURNING;
+            } else {
+                // Update the drone's position based on the current speed and direction
+                xd += currentSpeed * cos(direction) * simTimeStep;
+                yd += currentSpeed * sin(direction) * simTimeStep;
+            }
+            break;
+        case EN_DS_FIRING:
+            // Simulate the firing action (e.g., print a message or update a counter)
+            cout << "Firing at target!" << endl;
+        default:
+            break;
+        }
+
+        state = newState; // Update the state after decision making
+    return 0;
+}   
