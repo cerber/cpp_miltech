@@ -4,11 +4,11 @@
 #include <cstring>
 #include <cmath>
 
-#define MAX_STEPS 1
+const int MAX_STEPS = 10000;
 
-#define MAX_AMMO_NAME 16
-#define TARGETS_COUNT 5
-#define TARGETS_POINTS 60
+const int MAX_AMMO_NAME = 16;
+const int TARGETS_COUNT = 5;
+const int TARGETS_POINTS = 60;
 
 #define DEBUG 1
 
@@ -35,7 +35,16 @@ int calcBallistic(float xd, float yd, float zd, float targetX, float targetY,
 int simulationStep(droneStates &state, float directionToTarget, float distanceToTarget, 
     float turnThreshold, float hitRadius, float angularSpeed, 
     float acceleration, float attackSpeed, float simTimeStep, 
-    float &direction, float &currentSpeed, float &xd, float &yd);
+    float &direction, float &currentSpeed, float &xd, float &yd,
+    float fireX, float fireY); 
+
+float estimateTimeToTarget(float , float acceleration, float speed, float speedAttack, 
+    float delta, float threshold, float angularSpeed, float hitRadius);
+float accelMotionPath(float v0, float a, float t);
+float turningTime(float delta, float angularSpeed);
+float movingTime(float distance, float speed);
+float acceleratingTime(float v0, float a, float targetSpeed);
+float distance(float x1, float y1, float x2, float y2);
 
 int main() {
     // Open the input file
@@ -111,16 +120,6 @@ int main() {
     }
     targetFile.close();
 
-    // for (int i = 0; i < TARGETS_COUNT; i++) {
-    //     for (int j = 0; j < TARGETS_POINTS; j++) {
-    //         // Simulate the target movement and store the coordinates in arrays
-    //         // For example, you can use a simple circular motion for the target
-    //         float angle = targetTimeStep * j + i * M_PI / 2; // Different phase for each target
-    //         targetXInTime[i][j] = 100.0f * cos(angle); // Example radius of 100 units
-    //         targetYInTime[i][j] = 100.0f * sin(angle);
-    //     }
-    // }   
-
     // Set the ammunition parameters in arrays for better organization and scalability
     char  bombName[][MAX_AMMO_NAME] = {"VOG-17", "M67", "RKG-3", "GLIDING-VOG", "GLIDING-RKG"};
     float bombMass[] = {0.35f,  0.6f,   1.2f,   0.45f,  1.4f};
@@ -151,64 +150,92 @@ int main() {
     float currentSpeed = 0.0f;
     float acceleration = pow(attackSpeed, 2) / (2 * attackSpeed); // Acceleration rate of the drone
 
-    float simTime = 0.0f;   // Simulation time variable
-    int iteration = 0;      // Iteration counter for the simulation loop
-    int currentTarget = 0;  // Index of the current target
+    float simTime = 0.0f;     // Simulation time variable
+    int iteration = 0;        // Iteration counter for the simulation loop
+    int currentTarget = -1;   // Index of the current target
 
     do {
         float distanceToTarget[TARGETS_COUNT];  // Array to store the distance from the drone to each target
         float directionToTarget[TARGETS_COUNT]; // Array to store the direction from the drone to each target
+        float estimatedTimeToTarget[TARGETS_COUNT]; // Array to store the estimated time to reach each target
+        float fireX[TARGETS_COUNT]; // Array to store the X coordinate of the fire point for each target
+        float fireY[TARGETS_COUNT]; // Array to store the Y coordinate of the fire point for each target
+
+        int bestTarget = -1; // Variable to store the index of the best target to attack
+        float bestTargetTime = numeric_limits<float>::max(); // Variable to store the best estimated time to target
 
 #ifdef DEBUG        
         cout << std::fixed << std::setprecision(2);
-        cout << "######### Simulation Time: " << simTime << " seconds" << endl;
-        cout << "Drone Position: (" << xd << ", " << yd << ", " << zd << ")" << " Direction: " << direction << " radians";
-        cout << " Speed: " << currentSpeed << " m/s State: " << state << endl;
+        // cout << "######### Simulation Time: " << simTime << " seconds" << endl;
+        // cout << "Drone Position: (" << xd << ", " << yd << ", " << zd << ")" << " Direction: " << direction << " radians";
+        // cout << " Speed: " << currentSpeed << " m/s State: " << state << endl;
 #endif
 
         // loop through each target to calculate the distance and direction from the drone to the target
         for (int target = 0; target < TARGETS_COUNT; target++) { 
             float targetX{0.0f}, targetY{0.0f};
-            float fireX{0.0f}, fireY{0.0f}, xd1{0.0f}, yd1{0.0f};
+            float /* fireX{0.0f}, fireY{0.0f}, */ xd1{0.0f}, yd1{0.0f};
 
             targetInterpolation(target, targetXInTime, targetYInTime, targetTimeStep, simTime, targetX, targetY);
-            if (calcBallistic(xd, yd, zd, targetX, targetY, attackSpeed, accelerationPath, m, d, l, fireX, fireY, xd1, yd1) > 0) {
+            if (calcBallistic(xd, yd, zd, targetX, targetY, attackSpeed, accelerationPath, m, d, l, fireX[target], fireY[target], xd1, yd1) > 0) {
                 // If the ballistics calculation fails, set the distance and direction to target to zero
                 distanceToTarget[target] = 0.0f;
                 directionToTarget[target] = 0.0f;
                 continue;
             };
             if (xd1 == 0.0f && yd1 == 0.0f) {
-                distanceToTarget[target] = sqrt(pow(fireX - xd, 2) + pow(fireY - yd, 2));
-                directionToTarget[target] = atan2(fireY - yd, fireX - xd);
+                distanceToTarget[target] = distance(fireX[target], fireY[target], xd, yd);
+                directionToTarget[target] = atan2(fireY[target] - yd, fireX[target] - xd);
             } else {
                 // try to perform a maneuver if the drop point is outside the target area
-                distanceToTarget[target] = sqrt(pow(xd1 - xd, 2) + pow(yd1 - yd, 2));
+                distanceToTarget[target] = distance(xd1, yd1, xd, yd);
                 directionToTarget[target] = atan2(yd1 - yd, xd1 - xd); 
             }
 
-#ifdef DEBUG           
-            cout << "Target " << target + 1 << ": (" << targetX << ", " << targetY << ")";
-            cout << ",\tFire Point: (" << fireX << ", " << fireY << ")" << ",\tManeuver Point: (" << xd1 << ", " << yd1 << ")";
-            cout << ",\tDistance to Target: " << distanceToTarget[target] << ",\tDirection to Target: " << directionToTarget[target] << " radians" << endl;
-
-            while (state != EN_DS_FIRING) {
-                simulationStep(state, directionToTarget[target], distanceToTarget[target], turnThreshold, hitRadius, angularSpeed, acceleration, attackSpeed, simTimeStep, direction, currentSpeed, xd, yd);
-                simTime += simTimeStep;
+            if (distanceToTarget[target] < hitRadius) {
+                estimatedTimeToTarget[target] = 0.0f; // Already within the hit radius, no time needed
+            } else {
+                estimatedTimeToTarget[target] = estimateTimeToTarget(distanceToTarget[target], acceleration, currentSpeed, attackSpeed, 
+                    directionToTarget[target] - direction, turnThreshold, angularSpeed, hitRadius);
             }
-            cout << "Target " << target + 1 << " hit!" << endl;
-            cout << "-----------------------------------------" << endl;
-            cout << "######### Simulation Time: " << simTime << " seconds" << endl;
-            cout << "Drone Position: (" << xd << ", " << yd << ", " << zd << ")" << " Direction: " << direction << " radians";
-            cout << " Speed: " << currentSpeed << " m/s State: " << state << endl;  
+
+            // Decision making based on the current state and the distance/direction to the target
+            if (estimatedTimeToTarget[target] < bestTargetTime) {
+                bestTargetTime = estimatedTimeToTarget[target];
+                bestTarget = target;
+            }
+
+#ifdef DEBUG           
+            // cout << "Target " << target + 1 << ": (" << targetX << ", " << targetY << ")";
+            // cout << ",\tFire: (" << fireX << ", " << fireY << ")" << ",\tManeuver: (" << xd1 << ", " << yd1 << ")";
+            // cout << ",\tDistance: " << distanceToTarget[target] << ",\tDirection: " << directionToTarget[target] << " rad";
+            // cout << ",\tEst. Time: " << estimatedTimeToTarget[target] << " sec" << endl;
+
+            // while (state != EN_DS_FIRING) {
+            //     simulationStep(state, directionToTarget[target], distanceToTarget[target], turnThreshold, hitRadius, angularSpeed, acceleration, attackSpeed, simTimeStep, direction, currentSpeed, xd, yd);
+            //     simTime += simTimeStep;
+            // }
+            // cout << "Target " << target + 1 << " hit!" << endl;
+            // cout << "-----------------------------------------" << endl;
+            // cout << "######### Simulation Time: " << simTime << " seconds" << endl;
+            // cout << "Drone Position: (" << xd << ", " << yd << ", " << zd << ")" << " Direction: " << direction << " radians";
+            // cout << " Speed: " << currentSpeed << " m/s State: " << state << endl;  
 #endif
         }
 
-        // Decision making based on the current state and the distance/direction to the target
-
+        if (bestTarget != currentTarget) {
+            currentTarget = bestTarget; // Update the current target to the best target based on the estimated time to target
+#ifdef DEBUG
+            cout << "Best Target: " << currentTarget + 1 << " with estimated time: " << bestTargetTime << " seconds" << endl;
+#endif
+        }
+        simulationStep(state, directionToTarget[currentTarget], distanceToTarget[currentTarget], 
+            turnThreshold, hitRadius, angularSpeed, acceleration, attackSpeed, simTimeStep, 
+            direction, currentSpeed, xd, yd, fireX[currentTarget], fireY[currentTarget]);
         simTime += simTimeStep;
 
-    } while (++iteration < MAX_STEPS);
+    // Continue the simulation loop until the maximum number of steps is reached or a valid target is found
+    } while ((++iteration < MAX_STEPS) && (currentTarget != -1) && (state != EN_DS_FIRING)); 
 }
 
 int targetInterpolation(const int target, 
@@ -288,12 +315,13 @@ int calcBallistic(float xd, float yd, float zd, float targetX, float targetY,
         return 1;
     }
 
-    // Check if the drop point is within the target area
-    if (h + accelerationPath > distanceTarget) {
-        cerr << "Should to perform a maneuver!" << endl;
-        xd1 = targetX - (targetX - xd) * (h + accelerationPath) / distanceTarget;
-        yd1 = targetY - (targetY - yd) * (h + accelerationPath) / distanceTarget;
-    } 
+    // // Check if the drop point is within the target area
+    // cout << "Calculated drop point is at distance: " << h << " meters from the drone." << endl;
+    // if (h + accelerationPath > distanceTarget) {
+    //     // cerr << "Should to perform a maneuver!" << endl;
+    //     xd1 = targetX - (targetX - xd) * (h + accelerationPath) / distanceTarget;
+    //     yd1 = targetY - (targetY - yd) * (h + accelerationPath) / distanceTarget;
+    // } 
     
     // Calculate the coordinates of the drop point
     float ratio = (distanceTarget - h) / distanceTarget;
@@ -306,7 +334,8 @@ int calcBallistic(float xd, float yd, float zd, float targetX, float targetY,
 int simulationStep(droneStates &state, float directionToTarget, float distanceToTarget, 
     float turnThreshold, float hitRadius, float angularSpeed, 
     float acceleration, float attackSpeed, float simTimeStep, 
-    float &direction, float &currentSpeed, float &xd, float &yd) {
+    float &direction, float &currentSpeed, float &xd, float &yd,
+    float fireX, float fireY) {
 
     droneStates newState = state; // Variable to hold the new state after decision making
     float delta = directionToTarget - direction;
@@ -318,12 +347,14 @@ int simulationStep(droneStates &state, float directionToTarget, float distanceTo
                 break;
             } else if (fabs(delta) > turnThreshold) {
                 newState = EN_DS_TURNING;
-            } else if (distanceToTarget > hitRadius) {
+            } else {
+                direction = directionToTarget; // Align the drone's direction with the target
                 newState = EN_DS_ACCELERATING;
-            }
+            } 
             break;
         case EN_DS_TURNING:
             if (fabs(delta) <= turnThreshold) {
+                direction = directionToTarget; // Align the drone's direction with the target
                 newState = EN_DS_ACCELERATING;
             } else if (currentSpeed > 0.0f) {
                 newState = EN_DS_DECELERATING;
@@ -333,7 +364,7 @@ int simulationStep(droneStates &state, float directionToTarget, float distanceTo
             }
             break;
         case EN_DS_ACCELERATING:
-            if (fabs(delta) > turnThreshold) {
+            if (fabs(delta) > turnThreshold && distanceToTarget > hitRadius) {
                 newState = EN_DS_DECELERATING;
             // } else if (distanceToTarget <= hitRadius) {
             //     newState = EN_DS_FIRING;
@@ -352,7 +383,7 @@ int simulationStep(droneStates &state, float directionToTarget, float distanceTo
         case EN_DS_DECELERATING:
             // if (distanceToTarget <= hitRadius) {
             //     newState = EN_DS_FIRING;
-            // } else 
+            // } else { 
             {
                 // Simulate the deceleration by decreasing the drone's speed
                 currentSpeed -= acceleration * simTimeStep;
@@ -365,9 +396,13 @@ int simulationStep(droneStates &state, float directionToTarget, float distanceTo
                 xd += currentSpeed * cos(direction) * simTimeStep;
                 yd += currentSpeed * sin(direction) * simTimeStep;
             }
+            break;
         case EN_DS_MOVING:
-            if (distanceToTarget <= hitRadius) {
+            
+            if (distanceToTarget < hitRadius) {
                 newState = EN_DS_FIRING;
+            // if (distance(xd, yd, fireX, fireY) <= hitRadius) {
+            //     newState = EN_DS_FIRING;    
             } else if (fabs(delta) > turnThreshold) {
                 newState = EN_DS_TURNING;
             } else {
@@ -385,4 +420,61 @@ int simulationStep(droneStates &state, float directionToTarget, float distanceTo
 
         state = newState; // Update the state after decision making
     return 0;
-}   
+}
+
+float estimateTimeToTarget(float distance, float acceleration, float speed, float speedAttack, 
+    float delta, float threshold, float angularSpeed, float hitRadius) {
+    if (distance < hitRadius) {
+        return 0.0f; // Already within the hit radius, no time needed
+    }
+    // Calculate the time to reach the target based on distance and speed
+    if (fabs(delta) > threshold) {  
+        // If the direction to the target is outside the threshold, we need to turn first
+        float decelTime = acceleratingTime(speed, -acceleration, 0.0f); // Time to decelerate to zero
+        float decelPath = accelMotionPath(speed, -acceleration, decelTime); // Distance covered during deceleration
+        float turnTime = turningTime(delta, angularSpeed); // Time to turn
+        float accelTime = acceleratingTime(0.0f, acceleration, speedAttack); // Time to accelerate back to speed
+        float accelPath = accelMotionPath(0.0f, acceleration, accelTime); // Distance covered during acceleration
+        float remainingDistance = distance + decelPath - accelPath; // Remaining distance after deceleration and acceleration
+        if (remainingDistance < 0.0f) {
+            return numeric_limits<float>::max(); // target unreachable within the given parameters
+        }
+        return decelTime + turnTime + accelTime + remainingDistance / speedAttack; // Total time to target
+    } else {
+        if (speed < speedAttack) {
+            float accelTime = acceleratingTime(speed, acceleration, speedAttack); // Time to accelerate to attack speed
+            float accelPath = accelMotionPath(speed, acceleration, accelTime); // Distance covered during acceleration
+            if (distance - accelPath < 0.0f) {
+                return numeric_limits<float>::max(); // target unreachable within the given parameters
+            }
+            float remainingDistance = distance - accelPath; // Remaining distance after acceleration
+            return accelTime + remainingDistance / speedAttack; // Total time to target
+        } 
+        return distance / speed; // Time to target at current speed
+    }
+}
+
+float accelMotionPath(float v0, float a, float t) {
+    // Calculate the distance covered under constant acceleration
+    return v0 * t + 0.5f * a * pow(t, 2);
+}
+
+float turningTime(float delta, float angularSpeed) {
+    // Calculate the time required to turn by a certain angle at a given angular speed
+    return fabs(delta) / angularSpeed;
+}
+
+float movingTime(float distance, float speed) {
+    // Calculate the time required to move a certain distance at a given speed
+    return distance / speed;
+}
+
+float acceleratingTime(float v0, float a, float targetSpeed) {
+    // Calculate the time required to accelerate from v0 to targetSpeed at a given acceleration
+    return (targetSpeed - v0) / a;
+}
+
+float distance(float x1, float y1, float x2, float y2) {
+    // Calculate the distance between two points
+    return sqrt(pow(x2 - x1, 2) + pow(y2 - y1, 2));
+}
