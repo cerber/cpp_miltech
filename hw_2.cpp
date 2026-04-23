@@ -243,13 +243,13 @@ int main() {
     }
 
     // Write the drone's position, direction, state, and current target index at each step to the output file
-    outputFile << std::fixed << std::setprecision(2);
-    outputFile << iteration << endl;
-    for (int i = 0; i < iteration; i++) outputFile << positions[i][0] << " " << positions[i][1] << " "; outputFile << endl;
-    for (int i = 0; i < iteration; i++) outputFile << directions[i] << " "; outputFile << endl;
-    for (int i = 0; i < iteration; i++) outputFile << states[i] << " "; outputFile << endl;
-    for (int i = 0; i < iteration; i++) outputFile << currentTargets[i] << " "; outputFile << endl;
-    // for (int i = 0; i < iteration; i++) outputFile << speeds[i] << " "; outputFile << endl;
+    outputFile << std::fixed << std::setprecision(8);
+    outputFile << iteration - 1 << endl;
+    for (int i = 0; i < iteration - 1; i++) outputFile << positions[i][0] << " " << positions[i][1] << " "; outputFile << endl;
+    for (int i = 0; i < iteration - 1; i++) outputFile << directions[i] << " "; outputFile << endl;
+    for (int i = 0; i < iteration - 1; i++) outputFile << states[i] << " "; outputFile << endl;
+    for (int i = 0; i < iteration - 1; i++) outputFile << currentTargets[i] << " "; outputFile << endl;
+    // for (int i = 0; i < iteration - 1    ; i++) outputFile << speeds[i] << " "; outputFile << endl;
     outputFile.close();
 }
 
